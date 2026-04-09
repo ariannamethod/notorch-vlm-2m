@@ -33,13 +33,18 @@ bbox: The object’s bounding box (in the coco format).
 category: The object’s category, with possible values including Coverall (0), Face_Shield (1), Gloves (2), Goggles (3) and Mask (4).
 """
 
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from datasets import load_dataset
 import matplotlib.pyplot as plt
 import warnings
 import random
+from ariannamethod.notorch_py import notorch as torch
 from torch.utils.data import Dataset
+from ariannamethod.notorch_py import torchvision
 import torchvision.datasets as dset
-import torch.nn as nn
+from ariannamethod.notorch_py import nn
 from torchvision.transforms import ToTensor, Compose, Resize
 from random import choice
 
@@ -85,6 +90,7 @@ class Coco_Wrapper(Dataset):
         
         
 
+from ariannamethod.notorch_py import notorch as torch
 from torch.utils.data import DataLoader
 if __name__ == '__main__':
     """

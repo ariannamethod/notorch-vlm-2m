@@ -1,9 +1,12 @@
 """
 Seems like we want our own module so we can train multiple elements at once
+notorch edition — torch is the backend, notorch is the interface
 """
-import torch
-import torch.nn as nn
-import torchvision
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from ariannamethod.notorch_py import notorch as torch
+from ariannamethod.notorch_py import nn
 import random
 
 from modeling import vision_encoder, llm, projection

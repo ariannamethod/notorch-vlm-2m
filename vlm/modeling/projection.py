@@ -1,4 +1,7 @@
-import torch.nn as nn
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from ariannamethod.notorch_py import nn
 
 
 """
@@ -52,7 +55,7 @@ class ImageTokenizer(nn.Module):
 #     return Blip2QFormerModel()
 
 def qformer():
-    import torch
+    from ariannamethod.notorch_py import notorch as torch
     from qformer import QFormer
 
     # Create a random tensor of shape (1, 32, 512)

@@ -1,12 +1,16 @@
 """
-Use lightning for DDP training of VLM
-
+Use lightning for DDP training of VLM — notorch edition
+Chuck optimizer integrated via LitModel
 """
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import lightning as L
 from lit_vlm import VLM_LitModel
 from vlm import build_vlm
 import argparse
+
+from ariannamethod.notorch_py import notorch as torch
 
 parser = argparse.ArgumentParser(description='VLM Training Settings')
 

@@ -1,0 +1,32 @@
+# notorch build artifacts
+ariannamethod/notorch_test
+ariannamethod/notorch_test_gpu
+ariannamethod/notorch.o
+ariannamethod/libnotorch.a
+ariannamethod/lee
+ariannamethod/notorch_cuda.o
+
+# Chuck memory (persistent, not committed)
+chuck.mem
+ariannamethod/chuck.mem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Weights (tracked via .gitkeep, actual weights are large)
+weights/*.pt
+weights/*.bin
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
