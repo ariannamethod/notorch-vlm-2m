@@ -108,12 +108,13 @@ class VisionLanguageModel(nn.Module):
 
         # Pad to same length
         max_len = max(len(ids) for ids in int_captions)
-        padded = torch.zeros(len(int_captions), max_len, dtype=torch.long, device=device)
+        padded = torch.zeros(len(int_captions), max(max_len, 2), dtype=torch.long, device=device)
         for i, ids in enumerate(int_captions):
             padded[i, :len(ids)] = torch.tensor(ids, device=device)
 
         # Next-token prediction: pick random position
-        predict_at = random.randint(1, max(1, padded.shape[1] - 2))
+        seq_len = padded.shape[1]
+        predict_at = random.randint(1, max(1, seq_len - 2))
         caption_prefix_ids = padded[:, :predict_at]
         caption_target = padded[:, predict_at]
 
