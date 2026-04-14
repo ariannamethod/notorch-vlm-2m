@@ -53,9 +53,9 @@ PATCH_DIM = 3 * PATCH_SIZE * PATCH_SIZE  # 192 (RGB)
 ROPE_BASE = 10000.0  # RoPE base frequency (from lee.c)
 
 # Training
-N_STEPS = 8000       # more steps for 2M model + text corpus
+N_STEPS = 4000       # 4k steps — enough for convergence on 2M model
 LR = 3e-3            # from lee.c
-WARMUP = 800
+WARMUP = 400
 BATCH_SIZE = 16
 GRAD_CLIP = 1.0
 TEXT_RATIO = 0.5     # 50% text-only, 50% vision-caption
