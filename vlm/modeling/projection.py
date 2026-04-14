@@ -1,85 +1,51 @@
-import sys, os
+"""
+Projection — Image Tokenizer
+
+Projects vision encoder output to language model input dimension.
+Two-layer linear with GELU. Simple and effective.
+
+No external deps. Just notorch.
+"""
+
+import sys
+import os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from ariannamethod.notorch_py import nn
 
 
-"""
-Currently just using simple linear projection.
-Literature often uses tiny attention models like xformer (?) mini-gpt etc to get output tokens and then project to new LLM dim
-"""
-
 def get_image_tokenizer(projector_str, insize, outsize):
-    if 'qformer' in projector_str:
-        #config = BlipConfig(in_dim = insize,
-        #                    out_dim = outsize)
-        #return QFormer(config)
-        pass
-    else:
-        return ImageTokenizer(insize, outsize)
-    
-def get_in_size(image_encoder):
-    return image_encoder.config.hidden_size
+    """Build an image tokenizer (projection layer)."""
+    return ImageTokenizer(insize, outsize)
 
-def get_out_size(lang_tokenizer, llm):
-    input_ids = lang_tokenizer.encode('hi', add_special_tokens=True, return_tensors="pt")
-    vec = llm.get_input_embeddings()(input_ids)
-    embedded_tokens_size = vec.size()[-1]
-    return embedded_tokens_size
+
+def get_in_size(image_encoder):
+    """Get the output dimension of the vision encoder."""
+    if hasattr(image_encoder, 'd_model'):
+        return image_encoder.d_model
+    if hasattr(image_encoder, 'config'):
+        return image_encoder.config.hidden_size
+    raise ValueError("Cannot determine vision encoder output size")
+
+
+def get_out_size(language_tokenizer, language_model):
+    """Get the input dimension of the language model."""
+    if hasattr(language_model, 'd_model'):
+        return language_model.d_model
+    raise ValueError("Cannot determine language model input size")
+
 
 class ImageTokenizer(nn.Module):
+    """
+    Projects vision encoder outputs to LLM token input size.
+    (bs, seq_length, in_size) → (bs, seq_length, out_size)
+    """
     def __init__(self, in_dim, out_dim):
-        super(ImageTokenizer, self).__init__()
+        super().__init__()
         self.fc1 = nn.Linear(in_dim, out_dim)
         self.fc2 = nn.Linear(out_dim, out_dim)
         self.activ = nn.GELU()
-    
+
     def forward(self, x):
-        """
-        Forward maps vision_encoder outputs to llm_token input size
-        (bs, seq_length, in_size) -> (bs, seq_length, out_size)
-        """
         return self.fc2(self.activ(self.fc1(x)))
-    
-# class BlipConfig():
-#     """
-#     Build the config to pass to Blip2Qformer
-#     """
-#     def __init__(self, in_dim, out_dim):
-#         self.hidden_size = in_dim
-#         self.num_attention_heads = 8
-        
-
-# def QFormer(config):
-#     from transformers import Blip2QFormerModel
-#     return Blip2QFormerModel()
-
-def qformer():
-    from ariannamethod.notorch_py import notorch as torch
-    from qformer import QFormer
-
-    # Create a random tensor of shape (1, 32, 512)
-    x = torch.randn(1, 32, 512)
-
-    # Create a random image tensor of shape (1, 3, 224, 224)
-    img = torch.randn(1, 3, 224, 224)
-
-    # Create an instance of the QFormer model with the following parameters:
-    # - input_size: 512
-    # - num_heads: 8
-    # - num_layers: 8
-    # - dropout: 0.1
-    # - num_classes: 2
-    # - num_patches: 2
-    qformer = QFormer(512, 8, 8, 0.1, 2, 2)
-
-    # Apply the QFormer model to the input tensors x and img
-    y = qformer(x, img)
-    
-    
-    # Print the shape of the output tensor y
-    print(y.shape)
-    
-    # Then I think we literally jam the QFORMER output into the LLM? 
-    # I think? lol. that ounds crazty
-

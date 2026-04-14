@@ -36,11 +36,11 @@ from ariannamethod.chuck import ChuckOptimizer, ChuckMonitor
 # Config — tuned for ~1M params
 # ═══════════════════════════════════════════════════════════════════════
 
-D_MODEL = 256        # embedding dim (lee.c uses 256)
-N_HEADS = 8          # attention heads (lee.c uses 8)
-HEAD_DIM = D_MODEL // N_HEADS  # 32
-N_LAYERS = 6         # transformer layers
-MLP_DIM = D_MODEL * 4  # 1024 (lee.c uses 4×)
+D_MODEL = 112        # tuned for ~1M params
+N_HEADS = 4          # attention heads (head_dim = 28)
+HEAD_DIM = D_MODEL // N_HEADS  # 28
+N_LAYERS = 4         # transformer layers
+MLP_DIM = D_MODEL * 4  # 448 (lee.c uses 4×)
 MAX_SEQ = 128        # max sequence length
 IMAGE_SIZE = 32      # image size (lee.c: 32×32)
 PATCH_SIZE = 8       # patch size (lee.c: 8×8)
@@ -379,7 +379,7 @@ the picture displays a basic geometric form on a noisy surface.
 
 
 def create_synthetic_image(shape='red_square', size=IMAGE_SIZE):
-    """Create synthetic images with different shapes."""
+    """Create synthetic images with different shapes — vectorized, no Python loops."""
     img = torch.rand(3, size, size) * 0.15  # dark background
 
     c = size // 2
@@ -390,24 +390,24 @@ def create_synthetic_image(shape='red_square', size=IMAGE_SIZE):
         img[1, c-s:c+s, c-s:c+s] = 0.1 + torch.rand(2*s, 2*s) * 0.1
         img[2, c-s:c+s, c-s:c+s] = 0.1 + torch.rand(2*s, 2*s) * 0.1
     elif shape == 'blue_circle':
-        for y in range(size):
-            for x in range(size):
-                # Circle on the left side
-                cx, cy = size // 4, c
-                if (x - cx)**2 + (y - cy)**2 < s**2:
-                    img[0, y, x] = 0.1
-                    img[1, y, x] = 0.1
-                    img[2, y, x] = 0.7 + random.random() * 0.2
+        # Vectorized circle on the left side
+        yy, xx = torch.meshgrid(torch.arange(size), torch.arange(size), indexing='ij')
+        cx, cy = size // 4, c
+        mask = ((xx - cx).float()**2 + (yy - cy).float()**2) < s**2
+        img[0][mask] = 0.1
+        img[1][mask] = 0.1
+        img[2][mask] = 0.7 + torch.rand(mask.sum().item()) * 0.2
     elif shape == 'green_triangle':
-        for y in range(c-s, c+s):
-            # Triangle on the right side
-            base_x = 3 * size // 4
-            half_width = int(s * (y - (c - s)) / (2 * s))
-            for x in range(base_x - half_width, base_x + half_width + 1):
-                if 0 <= x < size and 0 <= y < size:
-                    img[0, y, x] = 0.1
-                    img[1, y, x] = 0.7 + random.random() * 0.2
-                    img[2, y, x] = 0.1
+        # Vectorized triangle on the right side
+        yy, xx = torch.meshgrid(torch.arange(size), torch.arange(size), indexing='ij')
+        bx = 3 * size // 4
+        # Triangle: width grows with y from top to bottom
+        y_frac = (yy.float() - (c - s)) / (2 * s)
+        half_width = (s * y_frac).clamp(0)
+        mask = (yy >= c - s) & (yy < c + s) & ((xx - bx).float().abs() <= half_width)
+        img[0][mask] = 0.1
+        img[1][mask] = 0.7 + torch.rand(mask.sum().item()) * 0.2
+        img[2][mask] = 0.1
 
     return img
 

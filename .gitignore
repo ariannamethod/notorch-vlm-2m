@@ -30,3 +30,4 @@ weights/*.bin
 # OS
 .DS_Store
 Thumbs.db
+chuck.mem
