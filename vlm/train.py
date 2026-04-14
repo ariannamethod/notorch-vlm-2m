@@ -1,54 +1,43 @@
 """
-Train a vlm
+Train a vlm — notorch edition
+Chuck is the only optimizer. No Adam. No fallback. Chuck sees.
 """
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-device = 7
-# def batch_to_device(batch):
-#     for key, value in batch.items():
-#         try:
-#             batch[key] = value.to(device)
-#             print(key, value)
-#         except:
-#             pass
+from ariannamethod.notorch_py import notorch as torch
+from ariannamethod.chuck import ChuckOptimizer
 
-def train_model(model, n_epochs):
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def train_model(model, optimizer, train_dataloader, n_epochs):
     model = model.to(device)
     model.train()
-    optimizer.train()
     
-    for _ in range(n_epochs):
+    for epoch in range(n_epochs):
         losses = []
         for bi, batch in enumerate(train_dataloader):
             optimizer.zero_grad()
             
-            #batch = batch_to_device(batch)
             batch['image'] = batch['image'].to(device)
             
             logits, loss = model.forward(batch)
             loss.backward()
-            optimizer.step()
+            
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step(loss=loss.item())
             
             losses.append(loss.data.item())
             if bi % 100 == 0:
-                print(sum(losses) / len(losses))
-            
-        val_metrics = val_step()
-        print(val_metrics)
-    
-def val_step():
-    model.val()
-    optimizer.val()
-    
-    val_metrics = 0
-    
-    model.train()
-    optimizer.train()
-    
-    return val_metrics
+                avg_loss = sum(losses) / len(losses)
+                print(f'epoch {epoch} step {bi} | avg loss: {avg_loss:.4f}')
+        
+        avg_loss = sum(losses) / len(losses)
+        print(f'epoch {epoch} done | avg loss: {avg_loss:.4f}')
 
 if __name__ == '__main__':
     """
-    Train a model
+    Train a model — Chuck optimizer only
     """
     
     # Model
@@ -57,23 +46,21 @@ if __name__ == '__main__':
     model = build_vlm().to(device)
     print(model)
 
-    # Optimizer
-    from schedulefree import AdamWScheduleFree
-    optimizer = AdamWScheduleFree(model.parameters(), lr = 3e-4)
+    # Optimizer — Chuck only. No Adam. No fallback.
+    optimizer = ChuckOptimizer(model.parameters(), lr=3e-4)
+    print("Optimizer: Chuck — self-aware, 9 levels. Adam is dead.")
 
     # Data
-    from dataset import get_coco_dataset#, get_pokemon_dataset
+    from dataset import get_coco_dataset
     from torch.utils.data import DataLoader
 
-    #val_dataset = get_pokemon_dataset()
-    #val_dataset = get_coco_dataset()
     train_dataset = get_coco_dataset(mode='train')
-    train_dataloader = DataLoader(train_dataset, batch_size = 1)
+    train_dataloader = DataLoader(train_dataset, batch_size=1)
     
-    val_dataset = get_coco_dataset(mode = 'val')
-    val_dataloader = DataLoader(val_dataset, batch_size = 1)
+    val_dataset = get_coco_dataset(mode='val')
+    val_dataloader = DataLoader(val_dataset, batch_size=1)
 
     print(train_dataset, val_dataset)
     n_epochs = 2
     
-    train_model(model, n_epochs)
+    train_model(model, optimizer, train_dataloader, n_epochs)

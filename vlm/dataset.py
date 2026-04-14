@@ -1,102 +1,121 @@
 """
-Dataset and dataloading for vision-language models.
+Dataset and dataloading for VLM training.
 
-We need to do a few things here:
-load image-text pairs
-format them
+Dependencies: notorch (torch backend). That's it.
+No torchvision. No datasets. No matplotlib. No COCO. No huggingface.
+The C line has zero deps. The Python line has one: torch (via notorch).
 
-Do we do this here or in the model?
-the model needs a way to take a set [dict1, dict2, ...] where dict_i = {text, imgae}
-Then format these into token sequences, pad them, and collate them into batches 
-
-So I guess the dataset can't really do that. Needs to be in the model to access the tokenizers, padding embedding etc?
+For the prototype, we use synthetic data (geometric shapes + captions).
+When real data is needed, we load from disk directly — no pip install required.
 """
 
-"""
-Sample Data
------------
-
-Sample data is borrowed from the `cppe-5` dataset. I use this data since it has images, string labels, and some interesting annotations such as bboxes we may enjoy using.
-It is also a small, reasonable size for testing
-
-Quote: https://huggingface.co/docs/datasets/en/object_detection
-The dataset has the following fields:
-
-image: PIL.Image.Image object containing the image.
-image_id: The image ID.
-height: The image height.
-width: The image width.
-objects: A dictionary containing bounding box metadata for the objects in the image:
-id: The annotation id.
-area: The area of the bounding box.
-bbox: The object’s bounding box (in the coco format).
-category: The object’s category, with possible values including Coverall (0), Face_Shield (1), Gloves (2), Goggles (3) and Mask (4).
-"""
-
-from datasets import load_dataset
-import matplotlib.pyplot as plt
-import warnings
+import sys
+import os
 import random
-from torch.utils.data import Dataset
-import torchvision.datasets as dset
-import torch.nn as nn
-from torchvision.transforms import ToTensor, Compose, Resize
-from random import choice
 
-def get_pokemon_dataset():
-    """
-    Get image-caption pokemon dataset. use this as val
-    """
-    return load_dataset("lambdalabs/pokemon-blip-captions")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-def get_coco_dataset(mode = 'train'):
+from ariannamethod.notorch_py import notorch as torch
+from ariannamethod.notorch_py import nn
+
+
+class SyntheticVLMDataset:
     """
-    Abcd
+    Synthetic dataset: geometric shapes + text captions.
+    No external dependencies. No downloads. No torchvision.
+    Just tensors and strings.
     """
-    coco_dataset = dset.CocoDetection(root = f'/data/coco2017/{mode}2017',
-                                        annFile = f'/data/coco2017/annotations/captions_{mode}2017.json'
-                                        )
-    return Coco_Wrapper(coco_dataset)
-    
-class Coco_Wrapper(Dataset):
-    def __init__(self, coco_dataset):
-        self.dataset = coco_dataset
-        #self.transforms = Compose(ToTensor(), Resize((256,256), antialias=True))
-        self.totensor = ToTensor()
-        self.resize = Resize((256, 256), antialias=True)
-        self.len = len(coco_dataset)
-        
+    SHAPES = {
+        'red_square': {
+            'color': (0.8, 0.15, 0.15),
+            'position': 'center',
+            'captions': [
+                "this is a red square in the center of the image.",
+                "the image shows a bright red square against a dark background.",
+                "a red colored square shape is positioned in the middle.",
+                "the central object is a red square on a noisy background.",
+                "there is a square colored red in the center of the frame.",
+                "the image contains a red square centered in the picture.",
+            ],
+        },
+        'blue_circle': {
+            'color': (0.15, 0.15, 0.8),
+            'position': 'left',
+            'captions': [
+                "this is a blue circle on the left side of the image.",
+                "the image shows a blue circular shape on the left.",
+                "a blue circle is visible on the left portion of the picture.",
+                "the left side contains a blue round shape.",
+                "there is a blue circle positioned on the left of the frame.",
+                "a circular blue object appears on the left side.",
+            ],
+        },
+        'green_triangle': {
+            'color': (0.15, 0.8, 0.15),
+            'position': 'right',
+            'captions': [
+                "this is a green triangle on the right side of the image.",
+                "the image shows a green triangular shape on the right.",
+                "a green triangle is located on the right portion of the picture.",
+                "the right side contains a green triangle shape.",
+                "there is a green triangle positioned on the right of the frame.",
+                "a triangular green object appears on the right side.",
+            ],
+        },
+    }
+
+    def __init__(self, image_size=32):
+        self.image_size = image_size
+        self.shape_names = list(self.SHAPES.keys())
+
     def __len__(self):
-        return self.len
-    
-    def __getitem__(self, idx):
-        """
-        Get and transform items
-        """
-        img, target = self.dataset[idx]
-        image = self.totensor(img)
-        #image = self.resize(image)
-        
-        caption = choice(target)['caption']
-        
-        sample = {'image': image,
-                  'caption': caption}
-        return sample
-        
-        
+        return 10000  # virtual size
 
-from torch.utils.data import DataLoader
+    def make_image(self, shape_name):
+        """Generate a synthetic image tensor [3, H, W] — vectorized, fast."""
+        sz = self.image_size
+        img = torch.rand(3, sz, sz) * 0.15  # dark noisy background
+        info = self.SHAPES[shape_name]
+        r, g, b = info['color']
+        c = sz // 2
+        s = sz // 6
+
+        if 'square' in shape_name:
+            img[0, c - s:c + s, c - s:c + s] = r + torch.rand(2 * s, 2 * s) * 0.15
+            img[1, c - s:c + s, c - s:c + s] = g + torch.rand(2 * s, 2 * s) * 0.1
+            img[2, c - s:c + s, c - s:c + s] = b + torch.rand(2 * s, 2 * s) * 0.1
+        elif 'circle' in shape_name:
+            cx = sz // 4
+            yy, xx = torch.meshgrid(torch.arange(sz), torch.arange(sz), indexing='ij')
+            mask = ((xx - cx).float() ** 2 + (yy - c).float() ** 2) < s ** 2
+            img[0][mask] = r
+            img[1][mask] = g
+            img[2][mask] = b
+        elif 'triangle' in shape_name:
+            bx = 3 * sz // 4
+            yy, xx = torch.meshgrid(torch.arange(sz), torch.arange(sz), indexing='ij')
+            y_frac = (yy.float() - (c - s)) / (2 * s)
+            half_width = (s * y_frac).clamp(0)
+            mask = (yy >= c - s) & (yy < c + s) & ((xx - bx).float().abs() <= half_width)
+            img[0][mask] = r
+            img[1][mask] = g
+            img[2][mask] = b
+        return img
+
+    def __getitem__(self, idx):
+        shape = random.choice(self.shape_names)
+        image = self.make_image(shape)
+        caption = random.choice(self.SHAPES[shape]['captions'])
+        return {'image': image, 'caption': caption, 'shape': shape}
+
+
 if __name__ == '__main__':
     """
-    This function is used to test datasets returns the correct
+    Test dataset — no external deps needed.
     """
-    # Load a test dataset
-    dataset = get_coco_dataset()
-    
-    batch = dataset[0]
-    print(batch['image'].shape, batch['caption'])
-    
-    dataloader = DataLoader(dataset, batch_size = 2)
-    batch = next(iter(dataloader))
-    print(batch['image'].shape, batch['caption'])
-    
+    ds = SyntheticVLMDataset()
+    sample = ds[0]
+    print(f"Image shape: {sample['image'].shape}")
+    print(f"Caption: {sample['caption']}")
+    print(f"Shape: {sample['shape']}")
+    print(f"Dataset size: {len(ds)}")
