@@ -16,16 +16,15 @@ while the C line matures underneath.
 
 When the C line is ready, this file dies.
 And nothing of value will be lost.
+
+Dependencies: torch, numpy. That's it. No torchvision.
+No transformers. No lightning. No huggingface. No pip install 2.7GB.
+The C line has zero deps. This shim has two.
 """
 
 import torch as _torch
 import torch.nn as _nn
-
-# torchvision is optional — the C line doesn't need it
-try:
-    import torchvision as _torchvision
-except ImportError:
-    _torchvision = None
+import torch.nn.functional as _F
 
 # ── re-export torch as notorch ──────────────────────────────────────
 # "import notorch" should feel like "import torch"
@@ -34,7 +33,7 @@ except ImportError:
 
 notorch = _torch
 nn = _nn
-torchvision = _torchvision
+F = _F
 
 # re-export everything people expect from torch
 tensor = _torch.tensor
@@ -56,11 +55,8 @@ load = _torch.load
 cuda = _torch.cuda
 device = _torch.device
 
-# functional
-import torch.nn.functional as F  # noqa: F401,N812
-
 __all__ = [
-    'notorch', 'nn', 'torchvision', 'F',
+    'notorch', 'nn', 'F',
     'tensor', 'Tensor', 'LongTensor', 'FloatTensor',
     'no_grad', 'cat', 'stack', 'zeros', 'ones', 'randn', 'rand',
     'manual_seed', 'save', 'load', 'cuda', 'device',

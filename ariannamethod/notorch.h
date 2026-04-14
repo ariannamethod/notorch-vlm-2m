@@ -103,6 +103,8 @@ void nt_tensor_print(const nt_tensor* t, const char* name);
 #define NT_OP_SEQ_LAYERNORM  21   // layernorm per position
 #define NT_OP_GELU           22   // GELU activation
 #define NT_OP_GQA_ATTN       23   // grouped-query causal attention
+#define NT_OP_RRPRAM_ATTN    24   // RRPRAM positional attention (x @ Wr, causal)
+#define NT_OP_CONCAT         25   // concatenate two tensors per position
 
 typedef struct {
     nt_tensor* output;          // forward result
@@ -345,6 +347,24 @@ int nt_seq_layernorm(int x_idx, int gamma_idx, int beta_idx, int T, int D);
 // GELU activation: x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3)))
 int nt_gelu(int x_idx);
 
+// RRPRAM attention: positional pattern recognition via x @ Wr
+// wr: [nr_heads * n_embd, ctx], x: [T, n_embd], v: [T, nr_heads * head_dim]
+// output: [T, nr_heads * head_dim]
+int nt_rrpram_attention(int wr_idx, int x_idx, int v_idx, int T, int n_embd, int nr_heads, int head_dim);
+
+// Concatenate per-position: out[t] = [a[t], b[t]]. a: [T, D_a], b: [T, D_b] → out: [T, D_a+D_b]
+int nt_concat(int a_idx, int b_idx, int T);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BLAS — direct matmul API for inference engines
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// C[m,n] = A[m,k] @ B[n,k]^T  (B stored row-major [n,k])
+void nt_blas_mmT(float *C, const float *A, const float *BT, int m, int k, int n);
+
+// C[m,n] = A[m,k] @ B[k,n]
+void nt_blas_mm(float *C, const float *A, const float *B, int m, int k, int n);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROFILER — op timing + memory tracking
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -368,35 +388,33 @@ nt_profiler* nt_profiler_get(void);
 void         nt_profiler_print(void);
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BPE TOKENIZER — load merges, encode/decode
+// BPE TOKENIZER — byte-pair encoding for training and inference
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#define NT_BPE_MAX_MERGES   65536
-#define NT_BPE_MAX_VOCAB    65536
-#define NT_BPE_MAX_TOKEN_LEN 128
+#define NT_BPE_MAX_MERGES 32768
+#define NT_BPE_MAX_VOCAB  (256 + NT_BPE_MAX_MERGES)
+#define NT_BPE_MAX_TOKEN_LEN 64
 
 typedef struct {
-    char** vocab;               // vocab[i] = token string
-    int    vocab_size;
-    // Merge pairs: merge[i] = (pair_a, pair_b) → merged_id
-    int*   merge_a;
-    int*   merge_b;
-    int*   merge_result;
-    int    n_merges;
+    int merges[NT_BPE_MAX_MERGES][2];  // merge pairs: (a, b) → 256 + merge_idx
+    int n_merges;
+    int vocab_size;                     // 256 + n_merges
+    // Decode table: token_id → byte sequence
+    unsigned char tokens[NT_BPE_MAX_VOCAB][NT_BPE_MAX_TOKEN_LEN];
+    int token_len[NT_BPE_MAX_VOCAB];
 } nt_bpe;
 
-// Load BPE from merges file. Format: each line "token_a token_b" (pair)
-// vocab_file: one token per line. Returns NULL on failure.
-nt_bpe* nt_bpe_load(const char* merges_file, const char* vocab_file);
+// Load merges from text file: one "a b\n" pair per line
+int nt_bpe_load(nt_bpe* bpe, const char* path);
 
-// Encode text to token IDs. Returns count, writes to out_ids (caller allocates).
-int nt_bpe_encode(const nt_bpe* bpe, const char* text, int* out_ids, int max_ids);
+// Load merges from C array (for embedded merges)
+void nt_bpe_init(nt_bpe* bpe, const int merges[][2], int n_merges);
 
-// Decode token IDs to text. Returns heap-allocated string (caller frees).
-char* nt_bpe_decode(const nt_bpe* bpe, const int* ids, int n_ids);
+// Encode text → token IDs. Returns number of tokens written.
+int nt_bpe_encode(const nt_bpe* bpe, const char* text, int text_len, int* out, int max_tokens);
 
-// Free BPE
-void nt_bpe_free(nt_bpe* bpe);
+// Decode token IDs → text. Returns number of bytes written.
+int nt_bpe_decode(const nt_bpe* bpe, const int* tokens, int n_tokens, char* out, int max_bytes);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATALOADER — batch iterator for training
