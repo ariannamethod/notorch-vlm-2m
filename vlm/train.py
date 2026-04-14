@@ -1,6 +1,6 @@
 """
 Train a vlm — notorch edition
-Chuck replaces Adam. Adam stays as fallback. Chuck sees. Adam is blind.
+Chuck is the only optimizer. No Adam. No fallback. Chuck sees.
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -23,7 +23,9 @@ def train_model(model, optimizer, train_dataloader, n_epochs):
             
             logits, loss = model.forward(batch)
             loss.backward()
-            optimizer.step(loss=loss.item())  # Chuck needs the loss
+            
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step(loss=loss.item())
             
             losses.append(loss.data.item())
             if bi % 100 == 0:
@@ -35,7 +37,7 @@ def train_model(model, optimizer, train_dataloader, n_epochs):
 
 if __name__ == '__main__':
     """
-    Train a model — Chuck optimizer (Adam fallback)
+    Train a model — Chuck optimizer only
     """
     
     # Model
@@ -44,13 +46,9 @@ if __name__ == '__main__':
     model = build_vlm().to(device)
     print(model)
 
-    # Optimizer — Chuck (Adam as fallback)
-    try:
-        optimizer = ChuckOptimizer(model.parameters(), lr=3e-4)
-        print("Using Chuck Optimizer — Adam is blind. Chuck sees.")
-    except Exception as e:
-        print(f"Chuck unavailable ({e}), falling back to AdamW")
-        optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    # Optimizer — Chuck only. No Adam. No fallback.
+    optimizer = ChuckOptimizer(model.parameters(), lr=3e-4)
+    print("Optimizer: Chuck — self-aware, 9 levels. Adam is dead.")
 
     # Data
     from dataset import get_coco_dataset
