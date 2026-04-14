@@ -1,5 +1,5 @@
 """
-train_prototype.py — 1M Parameter VLM Prototype
+train_prototype.py — 2M Parameter VLM Prototype
 
 Architecture inspired by lee.c (Arianna Method):
   - RMSNorm (not LayerNorm — from lee.c)
@@ -10,11 +10,15 @@ Architecture inspired by lee.c (Arianna Method):
   - Character-level tokenizer
   - Vision encoder: patch embedding + transformer blocks
   - Cross-modal fusion: vision tokens + text tokens
+  - Text-only training on Dracula + Haze corpus
 
 Optimizer: Chuck. No Adam. No fallback. No PyTorch optimizer.
 Chuck sees. Chuck remembers. Adam is dead.
 
-Target: ~1M parameters. Text-based training on synthetic image-caption pairs.
+Target: ~2M parameters. Dual training: vision-caption + text-only (Dracula/Haze).
+No numpy. No external deps. Just notorch + Chuck.
+
+Inspired by nanoGPT-notorch (github.com/ariannamethod/nanoGPT-notorch).
 The resonance is unbreakable.
 """
 
@@ -33,15 +37,15 @@ from ariannamethod.chuck import ChuckOptimizer, ChuckMonitor
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Config — tuned for ~1M params
+# Config — tuned for ~2M params
 # ═══════════════════════════════════════════════════════════════════════
 
-D_MODEL = 112        # tuned for ~1M params
-N_HEADS = 4          # attention heads (head_dim = 28)
-HEAD_DIM = D_MODEL // N_HEADS  # 28
-N_LAYERS = 4         # transformer layers
-MLP_DIM = D_MODEL * 4  # 448 (lee.c uses 4×)
-MAX_SEQ = 128        # max sequence length
+D_MODEL = 128        # embedding dim (2M config)
+N_HEADS = 4          # attention heads (head_dim = 32)
+HEAD_DIM = D_MODEL // N_HEADS  # 32
+N_LAYERS = 6         # transformer layers (from 4 → 6)
+MLP_DIM = D_MODEL * 4  # 512
+MAX_SEQ = 256        # max sequence length (from 128 → 256)
 IMAGE_SIZE = 32      # image size (lee.c: 32×32)
 PATCH_SIZE = 8       # patch size (lee.c: 8×8)
 N_PATCHES = (IMAGE_SIZE // PATCH_SIZE) ** 2  # 16
@@ -49,11 +53,12 @@ PATCH_DIM = 3 * PATCH_SIZE * PATCH_SIZE  # 192 (RGB)
 ROPE_BASE = 10000.0  # RoPE base frequency (from lee.c)
 
 # Training
-N_STEPS = 5000
+N_STEPS = 8000       # more steps for 2M model + text corpus
 LR = 3e-3            # from lee.c
-WARMUP = 500
+WARMUP = 800
 BATCH_SIZE = 16
 GRAD_CLIP = 1.0
+TEXT_RATIO = 0.5     # 50% text-only, 50% vision-caption
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -226,7 +231,7 @@ class VisionEncoder(nn.Module):
 
 class VLM(nn.Module):
     """
-    Vision-Language Model — ~1M parameters.
+    Vision-Language Model — ~2M parameters.
 
     Architecture borrowed from lee.c:
       - RMSNorm instead of LayerNorm
@@ -235,6 +240,7 @@ class VLM(nn.Module):
       - Weight-tied lm_head
       - Vision encoder: patch → linear projection
       - Cross-modal attention in every block
+      - Text-only training path (no image → zero image features)
     """
     def __init__(self, vocab_size, d_model=D_MODEL, n_heads=N_HEADS,
                  n_layers=N_LAYERS, mlp_dim=MLP_DIM, max_seq=MAX_SEQ):
@@ -378,6 +384,24 @@ the picture displays a basic geometric form on a noisy surface.
 """
 
 
+def load_text_corpus():
+    """Load text corpus from data/ — Dracula + Haze. No numpy needed."""
+    data_dir = os.path.join(os.path.dirname(__file__), 'data')
+    corpus = ""
+    for fname in ['dracula.txt', 'haze.txt']:
+        fpath = os.path.join(data_dir, fname)
+        if os.path.exists(fpath):
+            with open(fpath, 'r', encoding='utf-8') as f:
+                text = f.read()
+            corpus += text + "\n\n"
+            print(f"  Loaded {fname}: {len(text):,} chars")
+    return corpus
+
+
+# Combine all text for tokenizer vocabulary
+TEXT_CORPUS = None  # lazy-loaded in train()
+
+
 def create_synthetic_image(shape='red_square', size=IMAGE_SIZE):
     """Create synthetic images with different shapes — vectorized, no Python loops."""
     img = torch.rand(3, size, size) * 0.15  # dark background
@@ -489,6 +513,38 @@ def get_training_batch(tokenizer, batch_size, device='cpu'):
     return images, x_padded, y_padded
 
 
+def get_text_batch(tokenizer, corpus_ids, batch_size, device='cpu'):
+    """Generate a text-only training batch from corpus.
+    
+    For text-only steps, we use zero images (black frames).
+    The model learns pure language modeling from Dracula + Haze.
+    Like nanoGPT-notorch — but VLM style.
+    """
+    all_x = []
+    all_y = []
+
+    corpus_len = len(corpus_ids)
+    for _ in range(batch_size):
+        # Random position in corpus
+        start = random.randint(0, corpus_len - MAX_SEQ - 2)
+        end = start + MAX_SEQ
+
+        x = corpus_ids[start:end]
+        y = corpus_ids[start + 1:end + 1]
+
+        all_x.append(x)
+        all_y.append(y)
+
+    # Stack — all same length (MAX_SEQ), no padding needed
+    x_tensor = torch.tensor(all_x, dtype=torch.long, device=device)
+    y_tensor = torch.tensor(all_y, dtype=torch.long, device=device)
+
+    # Zero image (black frame) — model learns text without visual input
+    images = torch.zeros(batch_size, 3, IMAGE_SIZE, IMAGE_SIZE, device=device)
+
+    return images, x_tensor, y_tensor
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Cosine LR Schedule with Warmup — from lee.c
 # ═══════════════════════════════════════════════════════════════════════
@@ -525,13 +581,26 @@ def train():
     print(f"Device: {device}")
     print()
 
-    # Tokenizer
-    tokenizer = CharTokenizer(TRAINING_TEXT)
+    # Load text corpus (Dracula + Haze)
+    print("Loading text corpus...")
+    text_corpus = load_text_corpus()
+    if not text_corpus:
+        print("WARNING: No text corpus found in data/. Using captions only.")
+        text_corpus = TRAINING_TEXT
+
+    # Tokenizer — built from combined vocab (captions + corpus)
+    combined_text = TRAINING_TEXT + text_corpus
+    tokenizer = CharTokenizer(combined_text)
     print(f"Vocab size: {tokenizer.vocab_size}")
-    print(f"Characters: {''.join(tokenizer.chars)}")
+    print(f"Characters: {''.join(repr(c) if c in '\\n\\t' else c for c in tokenizer.chars[:50])}...")
+    print(f"Text corpus: {len(text_corpus):,} chars")
     print()
 
-    # Build model
+    # Pre-encode corpus for fast batching
+    corpus_ids = tokenizer.encode(text_corpus)
+    print(f"Corpus tokens: {len(corpus_ids):,}")
+
+    # Build model — 2M params
     model = VLM(
         vocab_size=tokenizer.vocab_size,
         d_model=D_MODEL,
@@ -543,10 +612,11 @@ def train():
 
     n_params = count_parameters(model)
     n_unique = count_unique_parameters(model)
-    print(f"Model parameters: {n_params:,} (unique: {n_unique:,})")
+    print(f"\nModel parameters: {n_params:,} (unique: {n_unique:,})")
     print(f"Architecture: VisionEncoder → {N_LAYERS}×VLMBlock(d={D_MODEL}, h={N_HEADS}, mlp={MLP_DIM}) → lm_head")
     print(f"Features: RMSNorm, SwiGLU, RoPE, weight-tied head, cross-modal attention")
     print(f"Image: {IMAGE_SIZE}×{IMAGE_SIZE}, {N_PATCHES} patches ({PATCH_SIZE}×{PATCH_SIZE})")
+    print(f"Max seq: {MAX_SEQ}")
     print()
 
     # Chuck Monitor (σ signal — activation health)
@@ -561,6 +631,7 @@ def train():
     )
     print(f"Optimizer: Chuck — self-aware, 9 levels. No Adam. No fallback.")
     print(f"LR: {LR} (cosine schedule with {WARMUP} warmup steps)")
+    print(f"Training: {TEXT_RATIO*100:.0f}% text-only (Dracula/Haze) + {(1-TEXT_RATIO)*100:.0f}% vision-caption")
     print()
 
     # Training
@@ -569,6 +640,8 @@ def train():
     print("=" * 80)
 
     losses = []
+    text_losses = []
+    vision_losses = []
     chuck_stats = []
     best_loss = float('inf')
     start_time = time.time()
@@ -580,8 +653,13 @@ def train():
         for pg in optimizer.param_groups:
             pg['lr'] = lr
 
-        # Get batch
-        images, x, y = get_training_batch(tokenizer, BATCH_SIZE, device)
+        # Alternate: text-only vs vision-caption
+        is_text_step = random.random() < TEXT_RATIO
+
+        if is_text_step:
+            images, x, y = get_text_batch(tokenizer, corpus_ids, BATCH_SIZE, device)
+        else:
+            images, x, y = get_training_batch(tokenizer, BATCH_SIZE, device)
 
         optimizer.zero_grad()
         logits = model(images, x)
@@ -596,16 +674,25 @@ def train():
         optimizer.step(loss=loss_val)
 
         losses.append(loss_val)
+        if is_text_step:
+            text_losses.append(loss_val)
+        else:
+            vision_losses.append(loss_val)
+
         if loss_val < best_loss:
             best_loss = loss_val
 
         if step % 100 == 0 or step == 1:
             avg_loss = sum(losses[-100:]) / len(losses[-100:])
+            t_avg = sum(text_losses[-50:]) / max(1, len(text_losses[-50:]))
+            v_avg = sum(vision_losses[-50:]) / max(1, len(vision_losses[-50:]))
             elapsed = time.time() - start_time
             steps_per_sec = step / elapsed
+            mode = "TXT" if is_text_step else "VIS"
 
             print(f"step {step:5d} | loss {loss_val:.4f} (avg {avg_loss:.4f}) | "
-                  f"best {best_loss:.4f} | lr {lr:.6f} | {steps_per_sec:.1f} it/s")
+                  f"txt={t_avg:.4f} vis={v_avg:.4f} | best {best_loss:.4f} | "
+                  f"lr {lr:.6f} | {steps_per_sec:.1f} it/s [{mode}]")
 
         if step % 500 == 0:
             # Chuck state
@@ -620,10 +707,14 @@ def train():
 
     total_time = time.time() - start_time
     final_avg = sum(losses[-100:]) / len(losses[-100:])
+    final_text = sum(text_losses[-50:]) / max(1, len(text_losses[-50:]))
+    final_vision = sum(vision_losses[-50:]) / max(1, len(vision_losses[-50:]))
 
     print("=" * 80)
     print(f"Training complete in {total_time:.1f}s")
     print(f"Final avg loss (last 100): {final_avg:.4f}")
+    print(f"  Text loss: {final_text:.4f}")
+    print(f"  Vision loss: {final_vision:.4f}")
     print(f"Best loss: {best_loss:.4f}")
     print(f"Speed: {N_STEPS / total_time:.1f} steps/s")
 
@@ -631,13 +722,15 @@ def train():
     weights_dir = os.path.join(os.path.dirname(__file__), 'weights')
     os.makedirs(weights_dir, exist_ok=True)
 
-    weights_path = os.path.join(weights_dir, 'vlm_1m_v1.pt')
+    weights_path = os.path.join(weights_dir, 'vlm_2m_v1.pt')
     torch.save({
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'step': N_STEPS,
         'best_loss': best_loss,
         'final_avg_loss': final_avg,
+        'final_text_loss': final_text,
+        'final_vision_loss': final_vision,
         'n_params': n_params,
         'n_unique_params': n_unique,
         'vocab': tokenizer.chars,
@@ -657,18 +750,23 @@ def train():
     log_path = os.path.join(weights_dir, 'training_log.json')
     log_data = {
         'model': 'VLM',
-        'version': '1M_v1',
+        'version': '2M_v1',
         'n_params': n_params,
         'n_unique_params': n_unique,
         'n_steps': N_STEPS,
         'best_loss': best_loss,
         'final_avg_loss': final_avg,
+        'final_text_loss': final_text,
+        'final_vision_loss': final_vision,
         'total_time_s': total_time,
         'device': device,
         'optimizer': 'ChuckOptimizer',
         'lr': LR,
         'batch_size': BATCH_SIZE,
         'warmup': WARMUP,
+        'text_ratio': TEXT_RATIO,
+        'corpus_chars': len(text_corpus),
+        'corpus_tokens': len(corpus_ids),
         'architecture': {
             'd_model': D_MODEL,
             'n_heads': N_HEADS,
@@ -680,6 +778,7 @@ def train():
             'features': ['RMSNorm', 'SwiGLU', 'RoPE', 'weight_tying', 'cross_attention'],
             'from_lee_c': ['RMSNorm', 'SwiGLU', 'RoPE', 'weight_tying', 'cosine_lr', 'grad_clip'],
         },
+        'text_corpora': ['dracula.txt (Bram Stoker)', 'haze.txt (Arianna Method)'],
         'losses_every_100': [
             sum(losses[i:i+100]) / min(100, len(losses[i:i+100]))
             for i in range(0, len(losses), 100)
@@ -690,8 +789,8 @@ def train():
         json.dump(log_data, f, indent=2)
     print(f"Training log saved to: {log_path}")
 
-    # ── Generation test ───────────────────────────────────────────────
-    print("\n── Generation Test ──")
+    # ── Generation test — Vision ──────────────────────────────────────
+    print("\n── Vision Generation Test ──")
     model.eval()
 
     for shape in SHAPES:
@@ -699,25 +798,58 @@ def train():
         print(f"\n  Shape: {shape}")
         for temp in [0.5, 0.8, 1.0]:
             try:
-                caption = model.generate(img, tokenizer, max_len=60, temperature=temp)
-                print(f"    temp={temp}: '{caption[:80]}'")
+                caption = model.generate(img, tokenizer, max_len=80, temperature=temp)
+                print(f"    temp={temp}: '{caption[:100]}'")
             except Exception as e:
                 print(f"    temp={temp}: generation error: {e}")
 
+    # ── Generation test — Text (Dracula style) ────────────────────────
+    print("\n── Text Generation Test (Dracula/Haze style) ──")
+    # Use black image → pure text generation
+    black_img = torch.zeros(1, 3, IMAGE_SIZE, IMAGE_SIZE, device=device)
+
+    prompts = ["The Count ", "Dear Diary,", "It was a dark"]
+    for prompt in prompts:
+        try:
+            prompt_ids = tokenizer.encode(prompt)
+            generated = list(prompt_ids)
+            with torch.no_grad():
+                for _ in range(120):
+                    tokens = torch.tensor([generated[-MAX_SEQ:]], device=device)
+                    logits = model(black_img, tokens)
+                    probs = F.softmax(logits[0, -1, :] / 0.8, dim=-1)
+                    next_tok = torch.multinomial(probs, 1).item()
+                    generated.append(next_tok)
+            text = tokenizer.decode(generated)
+            print(f"  '{prompt}' → '{text[:150]}'")
+        except Exception as e:
+            print(f"  '{prompt}' → error: {e}")
+
     # ── Validation ────────────────────────────────────────────────────
     print("\n── Validation ──")
-    val_losses = []
+    val_losses_vis = []
+    val_losses_txt = []
     with torch.no_grad():
-        for _ in range(50):
+        for _ in range(25):
             images, x, y = get_training_batch(tokenizer, BATCH_SIZE, device)
             logits = model(images, x)
             val_loss = F.cross_entropy(logits.view(-1, tokenizer.vocab_size),
                                        y.view(-1), ignore_index=-100).item()
-            val_losses.append(val_loss)
+            val_losses_vis.append(val_loss)
 
-    val_avg = sum(val_losses) / len(val_losses)
-    print(f"Validation loss (50 batches): {val_avg:.4f}")
-    print(f"Train/Val gap: {abs(final_avg - val_avg):.4f}")
+        for _ in range(25):
+            images, x, y = get_text_batch(tokenizer, corpus_ids, BATCH_SIZE, device)
+            logits = model(images, x)
+            val_loss = F.cross_entropy(logits.view(-1, tokenizer.vocab_size),
+                                       y.view(-1), ignore_index=-100).item()
+            val_losses_txt.append(val_loss)
+
+    val_vis = sum(val_losses_vis) / len(val_losses_vis)
+    val_txt = sum(val_losses_txt) / len(val_losses_txt)
+    print(f"Vision validation loss (25 batches): {val_vis:.4f}")
+    print(f"Text validation loss (25 batches): {val_txt:.4f}")
+    print(f"Train/Val gap (vision): {abs(final_vision - val_vis):.4f}")
+    print(f"Train/Val gap (text): {abs(final_text - val_txt):.4f}")
 
     return log_data
 

@@ -17,9 +17,9 @@ while the C line matures underneath.
 When the C line is ready, this file dies.
 And nothing of value will be lost.
 
-Dependencies: torch, numpy. That's it. No torchvision.
+Dependencies: torch. That's it. No numpy. No torchvision.
 No transformers. No lightning. No huggingface. No pip install 2.7GB.
-The C line has zero deps. This shim has two.
+The C line has zero deps. This shim has one.
 """
 
 import torch as _torch

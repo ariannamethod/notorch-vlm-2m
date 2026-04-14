@@ -3,7 +3,7 @@ Dataset and dataloading for VLM training.
 
 Dependencies: notorch (torch backend). That's it.
 No torchvision. No datasets. No matplotlib. No COCO. No huggingface.
-The C line has zero deps. The Python line has two: torch + numpy.
+The C line has zero deps. The Python line has one: torch (via notorch).
 
 For the prototype, we use synthetic data (geometric shapes + captions).
 When real data is needed, we load from disk directly — no pip install required.

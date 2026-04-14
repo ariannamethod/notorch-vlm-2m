@@ -19,9 +19,9 @@ dist/
 build/
 *.egg
 
-# Weights (tracked via .gitkeep, actual weights are large)
-weights/*.pt
-weights/*.bin
+# Weights — 2M model is ~8MB, fine for git. Tracked in repo.
+# weights/*.pt
+# weights/*.bin
 
 # IDE
 .vscode/

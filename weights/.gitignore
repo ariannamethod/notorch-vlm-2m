@@ -1,1 +1,2 @@
-*.pt
+# Weights are tracked in repo — 2M model is ~8MB, totally fine for git
+# *.pt
