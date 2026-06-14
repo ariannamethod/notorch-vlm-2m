@@ -19,7 +19,7 @@
 #define GGUF_TYPE_Q4_K 12
 #define GGUF_TYPE_Q6_K 14
 
-#define GGUF_MAX_TENSORS 512
+#define GGUF_MAX_TENSORS 2048   // F-11.2: covers Llama-70B-class (~723 tensors); loader fails loud beyond this
 #define GGUF_MAX_NAME    128
 #define GGUF_MAX_KV      128
 
@@ -59,6 +59,7 @@ typedef struct {
 
     // Data section
     uint8_t*       data;          // mmap'd or loaded raw bytes
+    uint64_t       data_size;     // F-11.1: bytes in `data`, for dequant bounds check
     uint64_t       data_offset;   // file offset where tensor data starts
 
     // Architecture params (extracted from metadata)
